@@ -4,7 +4,7 @@
 <div id="topbar">
   <a href="/" class="tb-link">书架</a>
   <a href="/discuss/{{ book.id }}" class="tb-link">讨论</a>
-  <a href="/read/{{ book.id }}/1" class="tb-link">阅读</a>
+  <a href="/read/{{ book.id }}/{{ saved_pg }}?fs={{ saved_fs }}" class="tb-link">阅读</a>
   <span class="title">{{ conv.title }}</span>
   <span class="pageno">{{ pg }}/{{ total }}</span>
 </div>

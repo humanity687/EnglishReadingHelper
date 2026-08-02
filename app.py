@@ -375,13 +375,24 @@ def session_pages(msgs):
     return out
 
 
+def _progress_of(book_id):
+    prog = store.get_progress(book_id)
+    if prog:
+        return prog["page"], prog["font_size"]
+    return 1, 18
+
+
 @app.get("/discuss/<int:bid>")
 def discuss_list(bid):
     book = store.get_book(bid)
     if book is None:
         abort(404)
-    pg = int(request.args.get("pg", 1) or 1)
-    fs = int(request.args.get("fs", 18) or 18)
+    pg = int(request.args.get("pg", 0) or 0)
+    fs = int(request.args.get("fs", 0) or 0)
+    if pg <= 0 or fs <= 0:
+        saved_pg, saved_fs = _progress_of(bid)
+        pg = pg if pg > 0 else saved_pg
+        fs = fs if fs > 0 else saved_fs
     chapters = chapters_for(bid)
     cur_chap = _chapter_of_page(bid, pg, fs) or (chapters[0][0] if chapters else "")
     return render_template(
@@ -451,6 +462,7 @@ def discuss_conv(conv_id, page):
     if not pages:
         abort(404, "空会话")
     page = max(1, min(page, len(pages)))
+    saved_pg, saved_fs = _progress_of(conv["book_id"])
     return render_template(
         "conv.html",
         conv=conv,
@@ -460,6 +472,8 @@ def discuss_conv(conv_id, page):
         item=pages[page - 1],
         prev=page - 1 if page > 1 else None,
         nxt=page + 1 if page < len(pages) else None,
+        saved_pg=saved_pg,
+        saved_fs=saved_fs,
     )
 
 
