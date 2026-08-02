@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ book.title }} · {{ pg }}/{{ total }}{% endblock %}
+{% block body %}
+<div id="topbar">
+  <a href="/" class="tb-link">书架</a>
+  <span class="title">{{ book.title }}</span>
+  <span class="pageno">{{ pg }}/{{ total }}</span>
+  <span class="fs">
+    {% for f in [14,16,18,20,22,24,26,28] %}
+      {% if f == fs %}<b class="fs-cur">{{ f }}</b>{% else %}<a href="/read/{{ book.id }}/{{ pg }}?fs={{ f }}">{{ f }}</a>{% endif %}
+    {% endfor %}
+  </span>
+</div>
+<div id="content" style="font-size:{{ fs }}px">{{ html | safe }}</div>
+<div id="panel" class="off">
+  <div class="pbar"><span id="btn-close">收起</span></div>
+  <div id="pbody"><span class="hint">轻触单词查释义，轻触或横划句子看译文与句法</span></div>
+</div>
+<div id="pagebar">
+  {% if prev %}<a class="page-btn" href="/read/{{ book.id }}/{{ prev }}?fs={{ fs }}">上一页</a>{% else %}<span class="page-btn off">上一页</span>{% endif %}
+  {% if nxt %}<a class="page-btn" href="/read/{{ book.id }}/{{ nxt }}?fs={{ fs }}">下一页</a>{% else %}<span class="page-btn off">下一页</span>{% endif %}
+</div>
+<script src="{{ url_for('static', filename='reader.js') }}"></script>
+<script>Reader.init({book: {{ book.id }}, page: {{ pg }}, fs: {{ fs }}});</script>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}设置{% endblock %}
+{% block body %}
+<h1>设置</h1>
+<p class="hint"><a href="/">← 书架</a></p>
+<div class="card">
+  <div>LLM 状态：
+    {% if st.backend %}
+    <b>{{ st.backend }}</b> / {{ st.model }}
+    {% else %}
+    <b>未配置</b>：{{ st.msg }}
+    {% endif %}
+  </div>
+  <div>离线词典：{{ dict_words }} 词条（data/ecdict.db）</div>
+  <p class="hint">编辑 config.json 后点「重新加载配置」即可生效，无需重启。</p>
+  <form method="post" action="/config/reload"><button type="submit">重新加载配置</button></form>
+  <form method="post" action="/config/test"><button type="submit">测试 AI 翻译</button></form>
+</div>
+{% if result %}
+<div class="card"><pre class="mono">{{ result }}</pre></div>
+{% endif %}
+{% endblock %}

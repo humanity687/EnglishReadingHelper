@@ -1,0 +1,19 @@
+{
+  "llm": {
+    "mode": "auto",
+    "ollama": {
+      "base_url": "http://127.0.0.1:11434/v1",
+      "model": "gemma3:4b"
+    },
+    "api": {
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "",
+      "model": "deepseek-chat"
+    }
+  },
+  "data_dir": "data",
+  "dict_db": "data/ecdict.db",
+  "page": {
+    "chars": 1100
+  }
+}
