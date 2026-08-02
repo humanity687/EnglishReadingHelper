@@ -3,6 +3,7 @@
 {% block body %}
 <div id="topbar">
   <a href="/" class="tb-link">书架</a>
+  <a href="/discuss/{{ book.id }}?pg={{ pg }}&fs={{ fs }}" class="tb-link">讨论</a>
   <span class="title">{{ book.title }}</span>
   <span class="pageno">{{ pg }}/{{ total }}</span>
   <span class="fs">

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}AI 思考中{% endblock %}
+{% block head %}
+<meta http-equiv="refresh" content="8; url=/discuss/wait/{{ conv_id }}">
+{% endblock %}
+{% block body %}
+<div class="thinking">
+  <div>AI 思考中…</div>
+  <div class="hint">页面每 8 秒自动刷新，完成后自动跳转，请耐心等待</div>
+  <div class="hint"><a href="/discuss/conv/{{ conv_id }}/1">立即查看（可能尚未完成）</a></div>
+</div>
+{% endblock %}

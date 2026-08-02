@@ -71,7 +71,7 @@ def tokenize(text):
     return merged, words
 
 
-def _render_para(para):
+def _render_para(para, saved):
     sents, words = tokenize(para)
     if not sents:
         return html.escape(para).replace("\n", "<br>")
@@ -80,8 +80,9 @@ def _render_para(para):
     for a, b in sents:
         events.append((a, 1, "<span class=\"s\">"))
         events.append((b, 0, "</span>"))
-    for a, b, _w in words:
-        events.append((a, 2, "<span class=\"w\">"))
+    for a, b, w in words:
+        cls = " saved" if w.lower() in saved else ""
+        events.append((a, 2, "<span class=\"w" + cls + "\">"))
         events.append((b, 3, "</span>"))
     events.sort(key=lambda e: (e[0], e[1]))
 
@@ -97,18 +98,36 @@ def _render_para(para):
     return "".join(out)
 
 
-def render_page(text):
-    """把一页文本渲染为带 .s / .w span 的段落 HTML。"""
+def render_page(text, saved=None):
+    """把一页文本渲染为带 .s / .w span 的段落 HTML。
+
+    saved：本书生词本中的词（小写集合），命中词加 saved 标记（下划线）。
+    """
+    saved = saved or frozenset()
     out = []
     for para in PARA_RE.split(text):
         if not para.strip():
             continue
-        out.append("<p>" + _render_para(para) + "</p>")
+        out.append("<p>" + _render_para(para, saved) + "</p>")
     return "\n".join(out)
 
 
+_SENT_CUT_RE = re.compile(r"[.!?\u2026]+\s")
+
+
+def _sentence_cut(cur, cpp):
+    """在 cpp 前找最近的句子边界；找不到回退单词边界。"""
+    best = 0
+    for m in _SENT_CUT_RE.finditer(cur[:cpp + 1]):
+        best = m.end()
+    if best > 0:
+        return best
+    cut = cur.rfind(" ", 0, cpp + 1)
+    return cut if cut > 0 else cpp
+
+
 def paginate(text, cpp):
-    """按每页字符数把全书切成页（单词边界截断，整段优先）。"""
+    """按每页字符数把全书切成页（句子边界优先，整段优先，单词边界兜底）。"""
     pages = []
     cur = ""
     for p in text.split("\n\n"):
@@ -123,10 +142,33 @@ def paginate(text, cpp):
                 pages.append(cur)
             cur = p
         while len(cur) > cpp:
-            cut = cur.rfind(" ", 0, cpp + 1)
-            cut = cut if cut > 0 else cpp
+            cut = _sentence_cut(cur, cpp)
             pages.append(cur[:cut].rstrip())
             cur = cur[cut:].lstrip()
     if cur:
         pages.append(cur)
     return pages
+
+
+CHAP_RE = re.compile(
+    r"^chapter\s+[IVX\d]+\b.*$|^part\s+[IVX\d]+\b.*$|"
+    r"^第\s*[一二三四五六七八九十百零0-9]+\s*[章回节卷].*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def split_chapters(text):
+    """按常见章节标题切分全书，返回 [(label, start, end)]。
+
+    无标题匹配时全书视为一个章节（label 取首行截断）。
+    """
+    spans = [m.span() for m in CHAP_RE.finditer(text)]
+    if not spans:
+        first = text.strip().split("\n", 1)[0].strip()
+        return [((first[:40] or "全书"), 0, len(text))]
+    chapters = []
+    for i, (s, e) in enumerate(spans):
+        label = text[s:e].strip().split("\n")[0][:60]
+        end = spans[i + 1][0] if i + 1 < len(spans) else len(text)
+        chapters.append((label, s, end))
+    return chapters

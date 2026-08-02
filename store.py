@@ -41,6 +41,20 @@ def init(data_dir):
             font_size INTEGER NOT NULL DEFAULT 18,
             updated_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS convs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            chapter_label TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS conv_msgs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conv_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         """
     )
     c.commit()
@@ -149,3 +163,51 @@ def set_progress(book_id, page, font_size=None):
             (book_id, page, font_size),
         )
     c.commit()
+
+
+def vocab_words(book_id):
+    return [r["word"] for r in _conn().execute(
+        "SELECT word FROM vocab WHERE book_id = ?", (book_id,)).fetchall()]
+
+
+def add_conv(book_id, title, chapter_label=""):
+    c = _conn()
+    cur = c.execute(
+        "INSERT INTO convs (book_id, title, chapter_label) VALUES (?, ?, ?)",
+        (book_id, title, chapter_label),
+    )
+    c.commit()
+    return cur.lastrowid
+
+
+def get_conv(conv_id):
+    return _conn().execute(
+        "SELECT * FROM convs WHERE id = ?", (conv_id,)
+    ).fetchone()
+
+
+def list_convs(book_id):
+    return _conn().execute(
+        """SELECT c.id, c.title, c.chapter_label, c.created_at,
+                  (SELECT content FROM conv_msgs m WHERE m.conv_id = c.id
+                   ORDER BY m.id DESC LIMIT 1) AS last_msg
+           FROM convs c WHERE c.book_id = ? ORDER BY c.id DESC LIMIT 50""",
+        (book_id,),
+    ).fetchall()
+
+
+def add_msg(conv_id, role, content):
+    c = _conn()
+    cur = c.execute(
+        "INSERT INTO conv_msgs (conv_id, role, content) VALUES (?, ?, ?)",
+        (conv_id, role, content),
+    )
+    c.commit()
+    return cur.lastrowid
+
+
+def list_msgs(conv_id):
+    return _conn().execute(
+        "SELECT id, role, content FROM conv_msgs WHERE conv_id = ? ORDER BY id",
+        (conv_id,),
+    ).fetchall()

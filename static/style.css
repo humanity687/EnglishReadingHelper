@@ -52,6 +52,28 @@ body.panel-open #content { padding-bottom: 46vh; }
 .w { cursor: pointer; }
 .s { cursor: pointer; }
 .w.hl { background: #000; color: #fff; }
+.w.saved { border-bottom: 2px solid #000; }
+
+/* ---- 讨论页 ---- */
+.row { margin: 8px 0; }
+select, textarea, .reply-form input[type=text] {
+  border: 1px solid #000; background: #fff; color: #000;
+  font-size: 15px; width: 100%; box-sizing: border-box;
+}
+select { padding: 6px; width: auto; max-width: 100%; }
+textarea { padding: 6px; font-family: inherit; }
+.dq { border: 1px solid #ccc; padding: 8px 10px; margin: 10px 0; font-size: 15px; }
+.da p { margin-bottom: 1em; }
+.cont { color: #666; text-align: center; font-size: 14px; margin: 6px 0; }
+#replybar {
+  position: fixed; left: 0; right: 0; bottom: 52px; z-index: 4;
+  background: #fff; border-top: 1px solid #000; padding: 8px 10px;
+}
+.reply-form { display: flex; gap: 8px; }
+.reply-form input[type=text] { flex: 1; padding: 8px; }
+#content.conv { padding-bottom: 130px; }
+.thinking { text-align: center; padding: 60px 20px; font-size: 18px; }
+.thinking .hint { padding: 12px 0; }
 
 #pagebar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;

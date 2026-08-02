@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}讨论 · {{ book.title }}{% endblock %}
+{% block body %}
+<div id="topbar">
+  <a href="/" class="tb-link">书架</a>
+  <a href="/discuss/{{ book.id }}" class="tb-link">讨论</a>
+  <a href="/read/{{ book.id }}/1" class="tb-link">阅读</a>
+  <span class="title">{{ conv.title }}</span>
+  <span class="pageno">{{ pg }}/{{ total }}</span>
+</div>
+<div id="content" class="conv">
+  {% if item.role == 'q' %}
+  <div class="dq"><b>问：</b>{{ item.text | e }}</div>
+  {% else %}
+  <div class="da">
+    {% if not item.first %}<div class="cont">（续）</div>{% endif %}
+    {% for para in item.text.split('\n\n') %}<p>{{ para | e }}</p>{% endfor %}
+    {% if not item.last %}<div class="cont">（下页续）</div>{% endif %}
+  </div>
+  {% endif %}
+</div>
+<div id="pagebar">
+  {% if prev %}<a class="page-btn" href="/discuss/conv/{{ conv.id }}/{{ prev }}">上一页</a>{% else %}<span class="page-btn off">上一页</span>{% endif %}
+  {% if nxt %}<a class="page-btn" href="/discuss/conv/{{ conv.id }}/{{ nxt }}">下一页</a>{% else %}<span class="page-btn off">下一页</span>{% endif %}
+</div>
+<div id="replybar">
+  <form method="post" action="/discuss/reply" class="reply-form">
+    <input type="hidden" name="conv" value="{{ conv.id }}">
+    <input type="text" name="question" placeholder="继续提问…">
+    <button type="submit">追问</button>
+  </form>
+</div>
+{% endblock %}

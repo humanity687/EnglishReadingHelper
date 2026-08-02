@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}讨论 · {{ book.title }}{% endblock %}
+{% block body %}
+<h1>AI 讨论 · {{ book.title }}</h1>
+<p class="hint"><a href="/">← 书架</a> · <a href="/read/{{ book.id }}/{{ pg }}?fs={{ fs }}">返回阅读</a></p>
+<div class="card">
+  <form method="post" action="/discuss/new">
+    <input type="hidden" name="book" value="{{ book.id }}">
+    <div class="row">章节：
+      <select name="chapter">
+        {% for c in chapters %}
+        <option value="{{ c }}"{% if c == cur_chap %} selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <textarea name="question" rows="3" placeholder="就这个章节提问…"></textarea>
+    <div class="row"><button type="submit">提问</button></div>
+  </form>
+</div>
+{% if convs %}
+<table class="books">
+  <tr><th>话题</th><th>章节</th><th>时间</th><th></th></tr>
+  {% for c in convs %}
+  <tr>
+    <td>{{ c.title }}</td>
+    <td>{{ c.chapter_label }}</td>
+    <td>{{ c.created_at }}</td>
+    <td><a class="btn-link" href="/discuss/conv/{{ c.id }}/1">查看</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="hint">还没有讨论。选定章节后提问，AI 会结合章节原文回答，回复按页翻阅。</p>
+{% endif %}
+{% endblock %}

@@ -22,6 +22,15 @@ WORD_PROMPT = (
     '{{"meaning": "...", "pos": "..."}}\n\n句子：{s}'
 )
 
+DISCUSS_PROMPT = (
+    "你是学生的 AI 读书伙伴，面向中国中学生。下面是一本英文书的“{chapter}”章节开头"
+    "部分原文（可能被截断）：\n\n{context}\n\n"
+    "{history}"
+    "学生的问题：{question}\n\n"
+    "请结合章节内容用中文回答，条理清晰、贴合原文，一般不超过 500 字。"
+    "如果问题与章节内容无关，礼貌说明并建议其他讨论方向。"
+)
+
 
 def init(llm_cfg):
     """探测并选定可用后端；mode: auto / ollama / api。"""
@@ -88,6 +97,22 @@ def sentence(s):
 
 def word_insent(w, s):
     return _chat(WORD_PROMPT.format(w=w, s=s))
+
+
+def discuss(question, chapter_label, context, history_pairs, timeout=300):
+    hist = ""
+    if history_pairs:
+        lines = []
+        for q, a in history_pairs[-3:]:
+            lines.append("此前提问：%s\n此前回答：%s" % (q, a[:300]))
+        hist = "历史对话（供参考）：\n" + "\n\n".join(lines) + "\n\n"
+    return _chat(
+        DISCUSS_PROMPT.format(
+            chapter=chapter_label, context=context,
+            history=hist, question=question,
+        ),
+        timeout=timeout,
+    )
 
 
 def _parse_json(raw):
