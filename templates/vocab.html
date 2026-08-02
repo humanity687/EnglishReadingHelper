@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}生词本{% endblock %}
+{% block body %}
+<h1>生词本</h1>
+<p class="hint"><a href="/">← 书架</a></p>
+{% if words %}
+<table class="books">
+  <tr><th>单词</th><th>书</th><th>加入时间</th><th></th></tr>
+  {% for w in words %}
+  <tr>
+    <td>{{ w.word }}</td>
+    <td>{{ w.title }}</td>
+    <td>{{ w.added_at }}</td>
+    <td>
+      <form method="post" action="/api/vocab/remove">
+        <input type="hidden" name="book" value="{{ w.book_id }}">
+        <input type="hidden" name="word" value="{{ w.word }}">
+        <button class="btn-sm">移除</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="hint">还没有生词。阅读时点单词 → 「加入生词本」。</p>
+{% endif %}
+{% endblock %}

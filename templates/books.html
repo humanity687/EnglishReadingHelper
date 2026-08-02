@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}书架{% endblock %}
+{% block body %}
+<h1>EngReadHelper</h1>
+<div class="card">
+  <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".txt,.epub,.pdf">
+    <button type="submit">导入书籍</button>
+  </form>
+</div>
+{% if books %}
+<table class="books">
+  <tr><th>书名</th><th>作者</th><th>导入时间</th><th></th></tr>
+  {% for b in books %}
+  <tr>
+    <td>{{ b.title }}</td>
+    <td>{{ b.author }}</td>
+    <td>{{ b.created_at }}</td>
+    <td><a class="btn-link" href="/read/{{ b.id }}/{{ b.progress_page }}">继续阅读</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="hint">暂无书籍，先导入一本 TXT / EPUB / PDF。</p>
+{% endif %}
+<p class="hint">
+  <a href="/vocab">生词本</a> ·
+  <a href="/config">设置</a>
+  {% if llm_status.backend %}
+  · AI: {{ llm_status.backend }} / {{ llm_status.model }}
+  {% else %}
+  · AI: 未配置
+  {% endif %}
+  · 词典 {{ dict_words }} 词条
+</p>
+{% endblock %}
