@@ -16,7 +16,7 @@
     <td>{{ b.title }}</td>
     <td>{{ b.author }}</td>
     <td>{{ b.created_at }}</td>
-    <td><a class="btn-link" href="/read/{{ b.id }}/{{ b.progress_page }}">继续阅读</a></td>
+    <td><a class="btn-link" href="/read/{{ b.id }}/{{ b.progress_page }}?fs={{ b.progress_fs }}">继续阅读</a></td>
   </tr>
   {% endfor %}
 </table>

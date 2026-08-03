@@ -8,7 +8,7 @@
   <span class="pageno">{{ pg }}/{{ total }}</span>
   <span class="fs">
     {% for f in [14,16,18,20,22,24,26,28] %}
-      {% if f == fs %}<b class="fs-cur">{{ f }}</b>{% else %}<a href="/read/{{ book.id }}/{{ pg }}?fs={{ f }}">{{ f }}</a>{% endif %}
+      {% if f == fs %}<b class="fs-cur">{{ f }}</b>{% else %}<a href="/read/{{ book.id }}/{{ pg }}?fs={{ f }}&anchor={{ anchor|urlencode }}&ofs={{ fs }}">{{ f }}</a>{% endif %}
     {% endfor %}
   </span>
 </div>

@@ -91,7 +91,8 @@ def get_book(book_id):
 def list_books():
     return _conn().execute(
         """SELECT b.id, b.title, b.author, b.created_at,
-                  COALESCE(p.page, 1) AS progress_page
+                  COALESCE(p.page, 1) AS progress_page,
+                  COALESCE(p.font_size, 18) AS progress_fs
            FROM books b LEFT JOIN progress p ON p.book_id = b.id
            ORDER BY b.id DESC"""
     ).fetchall()

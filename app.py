@@ -125,6 +125,45 @@ def upload():
     return redirect(url_for("read", bid=bid, pg=1))
 
 
+def _anchor_of(text, n=40):
+    """取页面开头 n 字符作为定位锚点（空白归一化，单词边界截断）。"""
+    t = re.sub(r"\s+", " ", text).strip()
+    if len(t) <= n:
+        return t
+    cut = t.rfind(" ", 0, n + 1)
+    return t[:cut if cut > n // 2 else n]
+
+
+def _page_of_anchor(pages, anchor):
+    """在分页中查找包含锚点（或其前缀）的页，返回 1 基页码或 None。"""
+    if not anchor:
+        return None
+    cands = [anchor]
+    for k in (32, 24, 16, 12):
+        if len(anchor) > k:
+            cands.append(anchor[:k])
+    m = None
+    for mm in re.finditer(r"[.!?\u2026]", anchor):
+        m = mm
+    if m:
+        cands.append(anchor[:m.end()])
+        cands.append(anchor[:m.start() + 1])
+    for c in cands:
+        for i, p in enumerate(pages):
+            if c in p:
+                return i + 1
+    return None
+
+
+def _page_of_offset(pages, offset):
+    acc = 0
+    for i, p in enumerate(pages):
+        if acc <= offset < acc + len(p):
+            return i + 1
+        acc += len(p)
+    return len(pages)
+
+
 @app.get("/read/<int:bid>/<int:pg>")
 def read(bid, pg):
     book = store.get_book(bid)
@@ -134,6 +173,21 @@ def read(bid, pg):
     pages = _pages_for(bid, fs)
     if not pages:
         abort(404, "空书")
+
+    anchor = request.args.get("anchor")
+    if anchor:
+        target = _page_of_anchor(pages, anchor)
+        if target is None:
+            ofs = request.args.get("ofs")
+            try:
+                old_pages = _pages_for(bid, max(_FS_MIN, min(_FS_MAX, int(ofs))))
+                offset = sum(len(p) for p in old_pages[:max(pg - 1, 0)])
+                target = _page_of_offset(pages, offset)
+            except (TypeError, ValueError):
+                target = None
+        if target is not None and target != pg:
+            return redirect(url_for("read", bid=bid, pg=target, fs=fs))
+
     pg = max(1, min(pg, len(pages)))
     saved = {w.lower() for w in store.vocab_words(bid)}
     return render_template(
@@ -144,6 +198,7 @@ def read(bid, pg):
         fs=fs,
         prev=pg - 1 if pg > 1 else None,
         nxt=pg + 1 if pg < len(pages) else None,
+        anchor=_anchor_of(pages[pg - 1]),
         html=reader.render_page(pages[pg - 1], saved),
     )
 
