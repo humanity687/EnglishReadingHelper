@@ -1,5 +1,6 @@
-"""SQLite 持久层：books / cache / vocab / progress 四张表。"""
+"""SQLite 持久层：books / cache / vocab / progress / convs / scenes。"""
 import os
+import re
 import sqlite3
 import threading
 
@@ -55,6 +56,18 @@ def init(data_dir):
             content TEXT NOT NULL,
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS scenes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id INTEGER NOT NULL,
+            chapter_label TEXT DEFAULT '',
+            start_pos INTEGER NOT NULL,
+            end_pos INTEGER NOT NULL,
+            summary TEXT DEFAULT '',
+            quotes TEXT DEFAULT '[]',
+            entities TEXT DEFAULT '',
+            distilled_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_scenes_book ON scenes(book_id);
         """
     )
     c.commit()
@@ -212,3 +225,78 @@ def list_msgs(conv_id):
         "SELECT id, role, content FROM conv_msgs WHERE conv_id = ? ORDER BY id",
         (conv_id,),
     ).fetchall()
+
+
+def add_scene(book_id, chapter_label, start_pos, end_pos, summary, quotes, entities):
+    c = _conn()
+    import json as _json
+    quotes = quotes if isinstance(quotes, list) else []
+    cur = c.execute(
+        "INSERT INTO scenes (book_id, chapter_label, start_pos, end_pos, "
+        "summary, quotes, entities) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (book_id, chapter_label, start_pos, end_pos,
+         summary, _json.dumps(quotes, ensure_ascii=False), entities),
+    )
+    c.commit()
+    return cur.lastrowid
+
+
+def list_scenes(book_id):
+    return _conn().execute(
+        "SELECT * FROM scenes WHERE book_id = ? ORDER BY start_pos", (book_id,)
+    ).fetchall()
+
+
+def count_scenes(book_id):
+    return _conn().execute(
+        "SELECT COUNT(*) FROM scenes WHERE book_id = ?", (book_id,)
+    ).fetchone()[0]
+
+
+def scene_at(book_id, start_pos):
+    return _conn().execute(
+        "SELECT id FROM scenes WHERE book_id = ? AND start_pos = ?",
+        (book_id, start_pos),
+    ).fetchone()
+
+
+def _ngrams(q):
+    """查询 n-gram 集合：双字窗口（中文词基本双字，容错优于三字）。"""
+    q = re.sub(r"\s+", "", (q or "").lower())
+    if len(q) >= 2:
+        return {q[i:i + 2] for i in range(len(q) - 1)}
+    return {q} if q else set()
+
+
+def search_scenes(book_id, query, chapter_label=None, limit=8):
+    """按查询双字窗口评分检索场景记录（中英文均免分词，命中数排序）。"""
+    import json as _json
+    sql = ("SELECT id, book_id, chapter_label, start_pos, end_pos, summary, "
+           "quotes, entities FROM scenes WHERE book_id = ?")
+    params = [book_id]
+    if chapter_label:
+        sql += " AND chapter_label = ?"
+        params.append(chapter_label)
+    rows = _conn().execute(sql, params).fetchall()
+    if not rows:
+        return []
+    q = (query or "").strip()
+    if not q:
+        out = [dict(r) for r in rows[:limit]]
+        for r in out:
+            r["quotes"] = _json.loads(r["quotes"])
+        return out
+    grams = _ngrams(q)
+    if not grams:
+        return []
+    scored = []
+    for r in rows:
+        blob = (r["summary"] + " " + r["quotes"] + " " + r["entities"]).lower()
+        s = sum(1 for g in grams if g in blob)
+        if s:
+            scored.append((s, r))
+    scored.sort(key=lambda x: (-x[0], x[1]["id"]))
+    out = [dict(r) for _, r in scored[:limit]]
+    for r in out:
+        r["quotes"] = _json.loads(r["quotes"])
+    return out

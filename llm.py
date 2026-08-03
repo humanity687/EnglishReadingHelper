@@ -31,6 +31,36 @@ DISCUSS_PROMPT = (
     "如果问题与章节内容无关，礼貌说明并建议其他讨论方向。"
 )
 
+DISTILL_PROMPT = (
+    "你是这本书的共读伙伴，正在记住读过的内容。下面是一个片段（英文原文，"
+    "可能包含几个段落）。请用中文提炼它，只输出一个 JSON 对象：\n"
+    '{{"summary": "这个片段的情节摘要（一句话，中文，25字以内，能让人想起这段情节）",'
+    ' "quotes": [{{"text": "值得记住的原句，必须逐字抄录原文、一字不差（1-3条）",'
+    ' "speaker": "说话的角色（若不是对话则为空字符串"}}],'
+    ' "entities": "片段中的关键人物/地点/概念（逗号分隔，中英皆可，最多8个）"}}\n\n'
+    "片段：\n{text}"
+)
+
+RECALL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "recall",
+        "description": "回忆起此前读到的某个情节/场景。当你需要确认某个细节、"
+                       "引用书中的具体原句，或感觉记忆里应该有相关内容时调用。"
+                       "返回的记忆片段包含情节摘要和逐字原句。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "想回忆的内容：人物、事件、情节关键词（可用中文）",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 
 def init(llm_cfg):
     """探测并选定可用后端；mode: auto / ollama / api。"""
@@ -115,6 +145,63 @@ def discuss(question, chapter_label, context, history_pairs, timeout=300):
     )
 
 
+def distill(text, timeout=180):
+    """蒸馏一个场景：返回 {'summary', 'quotes', 'entities'}，失败抛异常。"""
+    content = _chat(DISTILL_PROMPT.format(text=text[:2000]), timeout=timeout)
+    d = _parse_json(content)
+    if d is None:
+        raise RuntimeError("蒸馏输出无法解析")
+    quotes = []
+    for q in (d.get("quotes") or []):
+        if isinstance(q, dict) and (q.get("text") or "").strip():
+            quotes.append({
+                "text": q["text"].strip(),
+                "speaker": (q.get("speaker") or "").strip(),
+            })
+    return {
+        "summary": (d.get("summary") or "").strip(),
+        "quotes": quotes,
+        "entities": (d.get("entities") or "").strip(),
+    }
+
+
+def chat_with_tools(messages, tools, tool_executor, timeout=300):
+    """带工具调用的对话循环：模型可多次调用工具（如 recall）。
+
+    tool_executor(name, args) -> str（工具结果文本，会被回填给模型）。
+    """
+    if not ready():
+        raise RuntimeError(STATE["msg"] or "LLM 未配置")
+    msgs = list(messages)
+    for _ in range(6):
+        r = STATE["client"].chat.completions.create(
+            model=STATE["model"],
+            messages=msgs,
+            tools=tools,
+            temperature=0.2,
+            timeout=timeout,
+        )
+        msg = r.choices[0].message
+        if not msg.tool_calls:
+            return msg.content or ""
+        msgs.append(msg)
+        for tc in msg.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            try:
+                result = tool_executor(tc.function.name, args)
+            except Exception as e:
+                result = "工具调用失败：" + str(e)
+            msgs.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
+    raise RuntimeError("工具调用轮次过多")
+
+
 def _parse_json(raw):
     s = raw.strip()
     s = re.sub(r"^```(?:json)?\s*", "", s)
@@ -125,6 +212,12 @@ def _parse_json(raw):
     core = s[a:b + 1]
     try:
         return json.loads(core)
+    except Exception:
+        pass
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(core)
+        if isinstance(obj, dict):
+            return obj
     except Exception:
         pass
     try:

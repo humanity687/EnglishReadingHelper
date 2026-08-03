@@ -15,5 +15,12 @@
   "dict_db": "data/ecdict.db",
   "page": {
     "chars": 1100
+  },
+  "co_read": {
+    "hot_window": 4000,
+    "distill_every": 5,
+    "distill_batch": 6,
+    "scene_chars": 700,
+    "recall_limit": 8
   }
 }

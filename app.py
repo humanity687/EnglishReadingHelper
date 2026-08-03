@@ -38,12 +38,20 @@ dictdb.init(os.path.join(BASE, CFG.get("dict_db", "data/ecdict.db")))
 _pages_cache = {}
 _TEXT_CACHE = {}
 _CHAPTERS_CACHE = {}
+_SCENES_CACHE = {}
 _DISC_TASKS = {}
 _PAGES_MAX = 32
 _TEXT_MAX = 3
 _FS_MIN, _FS_MAX = 14, 30
 _DISC_CPP = 600
-_CHAPTER_CTX = 5000
+_CO_READ = {
+    "hot_window": 4000,
+    "distill_every": 5,
+    "distill_batch": 6,
+    "scene_chars": 700,
+    "recall_limit": 8,
+}
+_CO_READ.update(CFG.get("co_read", {}) or {})
 
 
 def _data():
@@ -213,6 +221,11 @@ def api_progress():
     except (TypeError, ValueError):
         return jsonify({"error": "bad"}), 400
     store.set_progress(bid, page, fs)
+    if fs and page % _CO_READ["distill_every"] == 0:
+        position = _pos_of_page(bid, page, fs)
+        threading.Thread(
+            target=_distill_eligible, args=(bid, position), daemon=True
+        ).start()
     return jsonify({"ok": True})
 
 
@@ -327,9 +340,12 @@ def config_reload():
     CFG = load_cfg()
     DATA = os.path.join(BASE, CFG.get("data_dir", "data"))
     PAGE_CHARS = int(CFG.get("page", {}).get("chars", 1100))
+    _CO_READ.update(CFG.get("co_read", {}) or {})
     llm.init(CFG.get("llm", {}))
     _pages_cache.clear()
     _TEXT_CACHE.clear()
+    _CHAPTERS_CACHE.clear()
+    _SCENES_CACHE.clear()
     return redirect(url_for("config_page"))
 
 
@@ -351,11 +367,118 @@ def chapters_for(book_id):
     if book_id not in _CHAPTERS_CACHE:
         book = store.get_book(book_id)
         if book is None:
-            abort(404)
+            return []
         _CHAPTERS_CACHE[book_id] = reader.split_chapters(_book_text(book))
         if len(_CHAPTERS_CACHE) > 8:
             _CHAPTERS_CACHE.pop(next(iter(_CHAPTERS_CACHE)))
     return _CHAPTERS_CACHE[book_id]
+
+
+def scenes_for(book_id):
+    """全书场景位置列表 [(chapter_label, start, end)]（仅位置，不落库）。"""
+    if book_id not in _SCENES_CACHE:
+        book = store.get_book(book_id)
+        if book is None:
+            return []
+        text = _book_text(book)
+        out = []
+        for label, cs, ce in chapters_for(book_id):
+            for ss, se in reader.split_scenes(text[cs:ce], _CO_READ["scene_chars"]):
+                out.append((label, cs + ss, cs + se))
+        _SCENES_CACHE[book_id] = out
+        if len(_SCENES_CACHE) > 4:
+            _SCENES_CACHE.pop(next(iter(_SCENES_CACHE)))
+    return _SCENES_CACHE[book_id]
+
+
+def _pos_of_page(book_id, page, fs):
+    pages = _pages_for(book_id, fs)
+    if not pages:
+        return 0
+    page = max(1, min(page, len(pages)))
+    return sum(len(p) for p in pages[:page - 1])
+
+
+def _reading_position(book_id):
+    prog = store.get_progress(book_id)
+    if not prog:
+        return 0
+    return _pos_of_page(book_id, prog["page"], prog["font_size"])
+
+
+def _chapter_of_pos(book_id, pos):
+    for label, s, e in chapters_for(book_id):
+        if s <= pos < e:
+            return label
+    return ""
+
+
+def _distill_scene(book_id, text, label, start, end):
+    """蒸馏一个场景：LLM 提炼 + verbatim 金句校验，写入云层。"""
+    if store.scene_at(book_id, start) is not None:
+        return
+    raw = text[start:end]
+    if len(raw) < 40:
+        return
+    try:
+        out = llm.distill(raw)
+    except Exception:
+        return
+    quotes = []
+    for q in out["quotes"][:5]:
+        t = q["text"]
+        if len(t) >= 4 and t in raw:
+            quotes.append({"text": t, "speaker": q["speaker"]})
+    store.add_scene(book_id, label, start, end,
+                    out["summary"][:120], quotes, out["entities"][:200])
+
+
+def _distill_eligible(book_id, position, cap=None):
+    """定期保底：蒸馏热窗口之前尚未蒸馏的场景（后台线程）。"""
+    cap = cap if cap is not None else _CO_READ["distill_batch"]
+    book = store.get_book(book_id)
+    if book is None:
+        return
+    text = _book_text(book)
+    hot_start = max(0, position - _CO_READ["hot_window"])
+    done = {r["start_pos"] for r in store.list_scenes(book_id)}
+    todo = [(label, s, e) for label, s, e in scenes_for(book_id)
+            if e <= hot_start and s not in done]
+    todo.sort(key=lambda x: x[1])
+    for label, s, e in todo[:cap]:
+        _distill_scene(book_id, text, label, s, e)
+
+
+def _distill_chapter_gap(book_id, chapter_label, position, cap=5):
+    """按需补蒸馏：当前章节位于热窗口之前但尚未蒸馏的场景。"""
+    book = store.get_book(book_id)
+    if book is None:
+        return
+    text = _book_text(book)
+    hot_start = max(0, position - _CO_READ["hot_window"])
+    done = {r["start_pos"] for r in store.list_scenes(book_id)}
+    todo = [(label, s, e) for label, s, e in scenes_for(book_id)
+            if label == chapter_label and e <= hot_start and s not in done]
+    todo.sort(key=lambda x: x[1])
+    for label, s, e in todo[:cap]:
+        _distill_scene(book_id, text, label, s, e)
+
+
+def _recall(book_id, query, chapter_label=None):
+    results = store.search_scenes(
+        book_id, query, chapter_label, _CO_READ["recall_limit"])
+    if not results:
+        return "未找到相关记忆。"
+    lines = []
+    for r in results:
+        parts = ["情节：" + r["summary"]]
+        for q in r["quotes"][:3]:
+            s = "原句：" + q["text"]
+            if q.get("speaker"):
+                s += "（" + q["speaker"] + "）"
+            parts.append(s)
+        lines.append("【记忆片段】" + "；".join(parts))
+    return "\n".join(lines)
 
 
 def _chapter_of_page(book_id, pg, fs):
@@ -382,21 +505,49 @@ def _history_pairs(conv_id):
     return pairs
 
 
-def _discuss_context(book_id, chapter_label, conv_id):
-    chapters = chapters_for(book_id)
-    label, s, e = chapters[0] if chapters else ("", 0, 0)
-    for cl, cs, ce in chapters:
-        if cl == chapter_label:
-            label, s, e = cl, cs, ce
-            break
-    text = _book_text(store.get_book(book_id))
-    return text[s:s + _CHAPTER_CTX], _history_pairs(conv_id)
+def _co_read_answer(book_id, chapter_label, question, history_pairs):
+    """共读回答：热窗口原文 + 预检索记忆片段 + recall 工具循环。"""
+    book = store.get_book(book_id)
+    title = book["title"]
+    position = _reading_position(book_id)
+    _distill_chapter_gap(book_id, chapter_label, position)
+
+    text = _book_text(book)
+    hot_start = max(0, position - _CO_READ["hot_window"])
+    hot = text[hot_start:position]
+    progress_label = _chapter_of_pos(book_id, position) or "开头"
+    fragments = _recall(book_id, question, chapter_label)
+
+    frag_block = ("【此前记住的场景】\n" + fragments) if fragments else ""
+    system = (
+        "你是《%s》的共读伙伴，正在和用户一起读这本书。你们读到%s为止，"
+        "你只记得读过的内容，不得提及或编造未读部分（用户问未读内容时，"
+        "就说“还没读到那里”）。\n\n"
+        "你当前的记忆：\n"
+        "【最近读到的片段】\n%s\n\n"
+        "%s\n"
+        "回答要求：像人一样自然交流；需要引用原文时，只能逐字引用上面记忆中的"
+        "原句；可以说“我记得……”，想不起来就诚实说想不起来。"
+    ) % (title, progress_label, hot or "（还没有读过任何内容）", frag_block)
+
+    messages = [{"role": "system", "content": system}]
+    for q, a in history_pairs[-3:]:
+        messages.append({"role": "user", "content": q})
+        messages.append({"role": "assistant", "content": a[:1500]})
+    messages.append({"role": "user", "content": question})
+
+    def executor(name, args):
+        if name == "recall":
+            return _recall(book_id, args.get("query") or question, chapter_label)
+        return "未知工具：" + str(name)
+
+    return llm.chat_with_tools(messages, [llm.RECALL_TOOL], executor)
 
 
 def _discuss_worker(conv_id, book_id, chapter_label, question):
     try:
-        context, history = _discuss_context(book_id, chapter_label, conv_id)
-        answer = llm.discuss(question, chapter_label, context, history)
+        answer = _co_read_answer(book_id, chapter_label, question,
+                                 _history_pairs(conv_id))
     except Exception as e:
         answer = "生成失败：" + str(e)
     store.add_msg(conv_id, "a", answer)
@@ -448,17 +599,40 @@ def discuss_list(bid):
         saved_pg, saved_fs = _progress_of(bid)
         pg = pg if pg > 0 else saved_pg
         fs = fs if fs > 0 else saved_fs
+    position = _pos_of_page(bid, pg, fs)
     chapters = chapters_for(bid)
-    cur_chap = _chapter_of_page(bid, pg, fs) or (chapters[0][0] if chapters else "")
+    read_chapters = [label for label, s, _e in chapters if s <= position]
+    cur_chap = _chapter_of_page(bid, pg, fs) or (read_chapters[0] if read_chapters else "")
+    hot_start = max(0, position - _CO_READ["hot_window"])
+    done = {r["start_pos"] for r in store.list_scenes(bid)}
+    distillable = sum(1 for _l, s, e in scenes_for(bid)
+                      if e <= hot_start and s not in done)
     return render_template(
         "discuss.html",
         book=book,
         convs=store.list_convs(bid),
-        chapters=[c[0] for c in chapters],
+        chapters=read_chapters,
         cur_chap=cur_chap,
         pg=pg,
         fs=fs,
+        scenes=store.count_scenes(bid),
+        total_chapters=len(chapters),
+        distillable=distillable,
     )
+
+
+@app.post("/discuss/distill")
+def discuss_distill():
+    d = _data()
+    try:
+        bid = int(d.get("book"))
+    except (TypeError, ValueError):
+        abort(400)
+    position = _reading_position(bid)
+    threading.Thread(
+        target=_distill_eligible, args=(bid, position, 30), daemon=True
+    ).start()
+    return redirect(url_for("discuss_list", bid=bid))
 
 
 @app.post("/discuss/new")

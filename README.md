@@ -11,6 +11,7 @@
 - **跨页句子衔接**：分页优先在句子边界切页，句子永不跨页（超长句自动降级单词切分）
 - **生词下划线**：已加入生词本的词在正文中以下划线标出，一眼可见
 - **AI 书籍讨论**：按章节切分全书，就任一章节目录提问，AI 结合章节原文回答；回复自动分页（600 字/页），跨页带 `(下页续)/(续)` 标记，提交后等待页自动刷新跳转
+- **AI 共读（水循环记忆）**：AI 作为阅读进度与用户同步的共读伙伴——只记得已读内容（天然无剧透），读过的内容按"场景"蒸馏记忆（情节摘要 + verbatim 金句），旧的沉淀入云、提问时回想召回，能自然说出"写到某某情节时，某某说过'……'"，引用逐字校验防止幻觉
 - **生词本**：点词即加，独立页面管理
 - **字号切换**：切换后自动重新分页并保留阅读进度
 - **书源格式**：TXT / EPUB / 文本型 PDF（自动去重重复文字层、重建段落）
@@ -68,6 +69,11 @@ cp config.example.json config.json
 | `llm.ollama` | 本地 ollama 地址与模型（如 `gemma3:4b`） |
 | `llm.api` | OpenAI 兼容 API 的 `base_url` / `api_key` / `model` |
 | `page.chars` | 每页字符数（字号变化时按比例自动调整） |
+| `co_read.hot_window` | 共读热窗口字符数（阅读位置附近保留原文） |
+| `co_read.distill_every` | 每读 N 页触发一次后台记忆蒸馏 |
+| `co_read.distill_batch` | 每次蒸馏的场景数上限 |
+| `co_read.scene_chars` | 场景切分的字符粒度 |
+| `co_read.recall_limit` | 一次回想最多召回的场景数 |
 
 `config.json` 含密钥，已被 git 忽略，不会入库。
 
@@ -95,15 +101,15 @@ python app.py
 ## 项目结构
 
 ```
-app.py                 Flask 路由与配置加载（含 AI 讨论路由与后台生成任务）
-reader.py              分页（句子边界优先）/ 分词分句 / 章节切分 / 服务端渲染
+app.py                 Flask 路由与配置加载（讨论路由、共读记忆、蒸馏调度）
+reader.py              分页（句子边界优先）/ 分词分句 / 章节与场景切分 / 服务端渲染
 dictdb.py              ECDICT 查询 + 词形还原
-llm.py                 ollama / OpenAI 兼容 API 统一调用 + 容错 JSON 解析 + 讨论 prompt
+llm.py                 ollama / OpenAI 兼容 API 统一调用 + 容错 JSON 解析 + 工具调用循环 + 蒸馏 prompt
 extract.py             TXT / EPUB / PDF 文本提取（坐标去重、段落重建）
-store.py               SQLite：books / cache / vocab / progress / convs / conv_msgs
+store.py               SQLite：books / cache / vocab / progress / convs / scenes
 config.example.json    配置模板（复制为 config.json 使用）
 static/reader.js       全站唯一 JS（原生 ES5，兼容老 WebView）
-templates/             书架 / 阅读页 / 生词本 / 设置 / 讨论列表 / 会话分页 / 等待页
+templates/             书架 / 阅读页 / 生词本 / 设置 / 共读 / 会话分页 / 等待页
 data/                   运行时数据（git 忽略）
 ```
 
@@ -116,8 +122,9 @@ data/                   运行时数据（git 忽略）
 
 ## 已知限制
 
-- AI 讨论的上下文目前是"章节开头 5000 字 + 最近 3 轮对话"，不支持全书范围提问（全文检索式 RAG 规划中）
+- AI 共读的记忆机制是实验性的：场景检索用双字窗口评分（中英文免分词，场景库每本书几百条足够快），未使用向量/FTS5；召回质量取决于蒸馏金句的准确性（verbatim 校验已保证逐字，但可能漏选金句）
+- 共读伙伴只记得"热窗口原文 + 已蒸馏场景"，读到一半的章节里尚未蒸馏的部分可能回忆不全；点击「立即记住已读内容」可手动补齐
 - 章节识别基于常见标题行（`Chapter N` / `第N章` 等），无标题结构的书全书视为一章
 - PDF 仅支持文本型（扫描版需先 OCR）
 - 内置 Flask 开发服务器适合单机 / 局域网个人使用；多用户部署建议加认证并改用生产级 WSGI
-- 句子解析与讨论依赖 LLM：本地小模型（如 gemma3:4b）速度慢、输出格式偶尔不规范（已有容错解析兜底），在线 API 体验最佳
+- 依赖 LLM：本地小模型（如 gemma3:4b）速度慢、输出格式偶尔不规范（已有容错解析兜底），在线 API 体验最佳

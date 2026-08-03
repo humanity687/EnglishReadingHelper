@@ -172,3 +172,36 @@ def split_chapters(text):
         end = spans[i + 1][0] if i + 1 < len(spans) else len(text)
         chapters.append((label, s, end))
     return chapters
+
+
+def split_scenes(text, cpp=700):
+    """把章节文本按段落流切成场景，返回 [(start, end)] 区间列表。
+
+    每个场景约 cpp 字符（整段边界优先），超长段落自成场景。
+    """
+    boundaries = [0]
+    for m in re.finditer(r"\n{2,}", text):
+        boundaries.append(m.end())
+    boundaries.append(len(text))
+    paras = [(boundaries[i], boundaries[i + 1]) for i in range(len(boundaries) - 1)]
+    paras = [(s, e) for s, e in paras if text[s:e].strip()]
+
+    scenes = []
+    if not paras:
+        return scenes
+    start = paras[0][0]
+    acc = 0
+    for s, e in paras:
+        ln = e - s
+        if acc == 0:
+            start = s
+            acc = ln
+        elif acc + 2 + ln <= cpp:
+            acc += 2 + ln
+        else:
+            scenes.append((start, s))
+            start = s
+            acc = ln
+    if acc:
+        scenes.append((start, paras[-1][1]))
+    return scenes

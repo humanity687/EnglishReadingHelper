@@ -1,21 +1,33 @@
 {% extends "base.html" %}
-{% block title %}讨论 · {{ book.title }}{% endblock %}
+{% block title %}共读 · {{ book.title }}{% endblock %}
 {% block body %}
-<h1>AI 讨论 · {{ book.title }}</h1>
+<h1>AI 共读 · {{ book.title }}</h1>
 <p class="hint"><a href="/">← 书架</a> · <a href="/read/{{ book.id }}/{{ pg }}?fs={{ fs }}">返回阅读</a></p>
 <div class="card">
+  <div class="row">共读进度：<b>{{ cur_chap or "还未开始" }}</b>（共 {{ total_chapters }} 章）
+    {% if scenes %}<span class="hint-inline"> · 已记住 {{ scenes }} 个场景</span>{% endif %}
+  </div>
   <form method="post" action="/discuss/new">
     <input type="hidden" name="book" value="{{ book.id }}">
-    <div class="row">章节：
+    <input type="hidden" name="pg" value="{{ pg }}">
+    <input type="hidden" name="fs" value="{{ fs }}">
+    <div class="row">关注章节：
       <select name="chapter">
+        <option value="">全部已读</option>
         {% for c in chapters %}
         <option value="{{ c }}"{% if c == cur_chap %} selected{% endif %}>{{ c }}</option>
         {% endfor %}
       </select>
     </div>
-    <textarea name="question" rows="3" placeholder="就这个章节提问…"></textarea>
+    <textarea name="question" rows="3" placeholder="和共读伙伴聊聊读过的内容…"></textarea>
     <div class="row"><button type="submit">提问</button></div>
   </form>
+  {% if distillable %}
+  <form method="post" action="/discuss/distill">
+    <input type="hidden" name="book" value="{{ book.id }}">
+    <button type="submit">立即记住已读内容（{{ distillable }} 个场景待蒸馏）</button>
+  </form>
+  {% endif %}
 </div>
 {% if convs %}
 <table class="books">
@@ -30,6 +42,6 @@
   {% endfor %}
 </table>
 {% else %}
-<p class="hint">还没有讨论。选定章节后提问，AI 会结合章节原文回答，回复按页翻阅。</p>
+<p class="hint">共读伙伴只记得你读过的内容。读几页后来聊聊，问它关于人物、情节或原文的问题。</p>
 {% endif %}
 {% endblock %}
