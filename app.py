@@ -40,6 +40,7 @@ _TEXT_CACHE = {}
 _CHAPTERS_CACHE = {}
 _SCENES_CACHE = {}
 _DISC_TASKS = {}
+_DISTILL_STATE = {}
 _PAGES_MAX = 32
 _TEXT_MAX = 3
 _FS_MIN, _FS_MAX = 14, 30
@@ -434,7 +435,9 @@ def _distill_scene(book_id, text, label, start, end):
 
 
 def _distill_eligible(book_id, position, cap=None):
-    """定期保底：蒸馏热窗口之前尚未蒸馏的场景（后台线程）。"""
+    """定期保底：蒸馏热窗口之前尚未蒸馏的场景（后台线程，单本书单任务）。"""
+    if _DISTILL_STATE.get(book_id):
+        return
     cap = cap if cap is not None else _CO_READ["distill_batch"]
     book = store.get_book(book_id)
     if book is None:
@@ -445,8 +448,18 @@ def _distill_eligible(book_id, position, cap=None):
     todo = [(label, s, e) for label, s, e in scenes_for(book_id)
             if e <= hot_start and s not in done]
     todo.sort(key=lambda x: x[1])
-    for label, s, e in todo[:cap]:
-        _distill_scene(book_id, text, label, s, e)
+    todo = todo[:cap]
+    if not todo:
+        return
+    _DISTILL_STATE[book_id] = {"running": True, "done": 0, "total": len(todo)}
+    try:
+        for label, s, e in todo:
+            _distill_scene(book_id, text, label, s, e)
+            st = _DISTILL_STATE.get(book_id)
+            if st:
+                st["done"] += 1
+    finally:
+        _DISTILL_STATE.pop(book_id, None)
 
 
 def _distill_chapter_gap(book_id, chapter_label, position, cap=5):
@@ -628,11 +641,26 @@ def discuss_distill():
         bid = int(d.get("book"))
     except (TypeError, ValueError):
         abort(400)
+    if _DISTILL_STATE.get(bid):
+        return redirect(url_for("discuss_distill_status", bid=bid))
     position = _reading_position(bid)
     threading.Thread(
         target=_distill_eligible, args=(bid, position, 30), daemon=True
     ).start()
-    return redirect(url_for("discuss_list", bid=bid))
+    return redirect(url_for("discuss_distill_status", bid=bid))
+
+
+@app.get("/discuss/distill/status/<int:bid>")
+def discuss_distill_status(bid):
+    st = _DISTILL_STATE.get(bid)
+    if not st:
+        return redirect(url_for("discuss_list", bid=bid))
+    return render_template(
+        "distill_status.html",
+        book=store.get_book(bid),
+        done=st["done"],
+        total=st["total"],
+    )
 
 
 @app.post("/discuss/new")
