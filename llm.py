@@ -7,12 +7,14 @@ from openai import OpenAI
 STATE = {"client": None, "model": None, "backend": None, "msg": ""}
 
 SENT_PROMPT = (
-    "你是英语学习助手，面向中国中学生。请将下面的英语句子翻译成通顺自然的中文，"
+    "你是英语学习助手，面向中国中学生。{ctx}"
+    "请将下面的英语句子翻译成通顺自然的中文，"
     "并解析其语法结构，给出 2~4 条要点（句型、从句、时态、固定搭配等，用中文，"
-    "每条一句）。另外选出句中 1~3 个值得掌握的重点词，给出词性和在本句中的意思。"
+    "每条一句）。另外选出句中值得掌握的重点单词、固定搭配或习惯用语"
+    "（数量不限，按重要性列出），给出词性和在本句中的意思。"
     "只输出一个 JSON 对象，不要输出任何其他内容，格式："
-    '{"translation": "...", "grammar": ["要点1", "要点2"], '
-    '"words": [{"w": "词", "pos": "词性", "m": "句中意思"}]}\n\n句子：'
+    '{{"translation": "...", "grammar": ["要点1", "要点2"], '
+    '"words": [{{"w": "词或搭配", "pos": "词性", "m": "句中意思"}}]}}\n\n句子：'
 )
 
 WORD_PROMPT = (
@@ -121,8 +123,8 @@ def _chat(content, timeout=180):
     return r.choices[0].message.content or ""
 
 
-def sentence(s):
-    return _chat(SENT_PROMPT + s)
+def sentence(s, ctx=""):
+    return _chat(SENT_PROMPT.format(ctx=ctx) + s)
 
 
 def word_insent(w, s):

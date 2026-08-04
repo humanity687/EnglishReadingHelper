@@ -262,13 +262,32 @@ def api_sentence():
     s = _norm(d.get("s"))
     if not s:
         return jsonify({"error": "empty"}), 400
+    try:
+        bid = int(d.get("book") or 0)
+        page = int(d.get("page") or 0)
+        fs = int(d.get("fs") or 18)
+    except (TypeError, ValueError):
+        bid, page, fs = 0, 0, 18
+
+    s = _canonical_sentence(bid, page, fs, s)
+
+    ctx = ""
+    if bid:
+        book = store.get_book(bid)
+        if book is not None:
+            ctx = "这句话来自《%s》" % book["title"]
+            chap = _chapter_of_pos(bid, _pos_of_page(bid, page, fs))
+            if chap:
+                ctx += "（章节：%s）" % chap
+            ctx += "。"
+
     if not llm.ready():
         return jsonify({"error": "AI 未配置：请编辑 config.json 后到 /config 重新加载", "configured": False}), 503
-    key = _key(s)
+    key = _key(("%d\x00" % bid) + s)
     raw = store.get_cache("sent", key)
     if raw is None:
         try:
-            raw = llm.sentence(s)
+            raw = llm.sentence(s, ctx)
         except Exception as e:
             return jsonify({"error": "AI 调用失败：" + str(e)}), 502
         store.put_cache("sent", key, raw)
@@ -412,6 +431,37 @@ def _chapter_of_pos(book_id, pos):
         if s <= pos < e:
             return label
     return ""
+
+
+def _canonical_sentence(bid, page, fs, s):
+    """句子规范化：与页面原文逐句比对，取相似度最高且达标的原句。
+
+    防止浏览器/交互层造成的词粘连等微小失真传给 LLM 与缓存。
+    """
+    if not bid or not page or page < 1:
+        return s
+    pages = _pages_for(bid, max(_FS_MIN, min(_FS_MAX, fs)))
+    if not pages or page > len(pages):
+        return s
+    region = pages[page - 1]
+    sn = _norm(s)
+    if sn in _norm(region):
+        return sn
+    try:
+        import difflib
+        best_ratio, best = 0.0, None
+        for a, b in reader.tokenize(region)[0]:
+            cand = _norm(region[a:b])
+            if not cand or len(cand) < 6:
+                continue
+            ratio = difflib.SequenceMatcher(None, sn, cand).ratio()
+            if ratio > 0.8 and ratio > best_ratio:
+                best_ratio, best = ratio, cand
+        if best:
+            return best
+    except Exception:
+        pass
+    return sn
 
 
 def _distill_scene(book_id, text, label, start, end):

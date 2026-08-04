@@ -144,7 +144,7 @@
     highlight(el);
     curSent = el.textContent;
     setPanel("<div>AI 解析中…</div>");
-    post("/api/sentence", { s: curSent }, function (r, st) {
+    post("/api/sentence", { s: curSent, book: CFG.book, page: CFG.page, fs: CFG.fs }, function (r, st) {
       if (!r) { setPanel("<div>网络错误</div>"); return; }
       if (st === 503) { setPanel("<div>" + esc(r.error || "AI 未配置") + "</div>"); return; }
       setPanel(sentHTML(r));
