@@ -529,16 +529,16 @@ def _undistilled_count(book_id, position):
 def _recall(book_id, query, chapter_label=None):
     results = store.search_scenes(
         book_id, query, chapter_label, _CO_READ["recall_limit"])
-def _recall(book_id, query, chapter_label=None, detail=False):
-    """回忆召回：返回记忆片段文本。
+QUOTE_KEYWORDS = ("原话", "原句", "怎么说的", "怎么讲", "说过什么",
+                  "原词", "逐字", "引用", "quote", "原文", "原样")
 
-    detail=False：仅注入 gist/summary + 一条金句（token 友好）；
-    detail=True：追加故事细节与全部金句（渐进披露）。
+
+def _format_fragments(results, detail=False):
+    """把检索结果格式化为记忆片段文本。
+
+    detail=False：仅 gist/summary（token 友好，不注入金句）；
+    detail=True：追加故事细节与金句（渐进披露）。
     """
-    results = store.search_scenes(
-        book_id, query, chapter_label, _CO_READ["recall_limit"])
-    if not results:
-        return "未找到相关记忆。"
     lines = []
     for r in results:
         parts = []
@@ -555,14 +555,17 @@ def _recall(book_id, query, chapter_label=None, detail=False):
                 if q.get("speaker"):
                     s += "（" + q["speaker"] + "）"
                 parts.append(s)
-        elif quotes:
-            q = quotes[0]
-            s = "原句：" + q["text"]
-            if q.get("speaker"):
-                s += "（" + q["speaker"] + "）"
-            parts.append(s)
         lines.append("【记忆片段】" + "；".join(parts))
     return "\n".join(lines)
+
+
+def _recall(book_id, query, chapter_label=None, detail=False):
+    """回忆召回（recall 工具用）：返回记忆片段文本。"""
+    results = store.search_scenes(
+        book_id, query, chapter_label, _CO_READ["recall_limit"])
+    if not results:
+        return "未找到相关记忆。"
+    return _format_fragments(results, detail=detail)
 
 
 def _chapter_of_page(book_id, pg, fs):
@@ -591,30 +594,43 @@ def _history_pairs(conv_id):
 
 def _co_read_answer(book_id, chapter_label, question, history_pairs,
                     position=None):
-    """共读回答：补齐蒸馏缺口 → 热窗口原文 + 预检索记忆片段 + recall 循环。"""
+    """共读回答：异步补蒸馏 → 热窗口原文 + 预检索记忆片段 + 可选 recall 循环。"""
     book = store.get_book(book_id)
     title = book["title"]
     if position is None:
         position = _reading_position(book_id)
-    _distill_eligible(book_id, position, cap=15, force=True)
+    threading.Thread(
+        target=_distill_eligible, args=(book_id, position, 15), daemon=True
+    ).start()
 
     text = _book_text(book)
     hot_start = max(0, position - _CO_READ["hot_window"])
     hot = text[hot_start:position]
     progress_label = _chapter_of_pos(book_id, position) or "开头"
-    fragments = _recall(book_id, question, chapter_label)
 
-    frag_block = ("【此前记住的场景】\n" + fragments) if fragments else ""
+    detail = any(k in question.lower() for k in QUOTE_KEYWORDS)
+    results = store.search_scenes(
+        book_id, question, chapter_label, _CO_READ["recall_limit"])
+    fragments = _format_fragments(results, detail=detail)
+
     system = (
         "你是《%s》的共读伙伴，正在和用户一起读这本书。你们读到%s为止，"
         "你只记得读过的内容，不得提及或编造未读部分（用户问未读内容时，"
         "就说“还没读到那里”）。\n\n"
+        "你的读者人设：\n"
+        "· 你是初次阅读这本书的普通读者，不是文学评论家：表达直觉和困惑，"
+        "可以提不成熟的想法，也可以说“我还没想清楚”。\n"
+        "· 如果是知名作品，假装不知道情节：不要使用训练中关于这本书的先验知识，"
+        "一切只依据下面给出的已读内容。可以猜测后续，但必须带着初次读者的不确定"
+        "（“我猜……不知道对不对”）。\n"
+        "· 回答默认用自己的话复述记忆内容，不要假装逐字引用；只有当记忆里明确"
+        "给出了原句（或用户明确要原话）时，才逐字引用，且只能逐字。\n\n"
         "你当前的记忆：\n"
         "【最近读到的片段】\n%s\n\n"
         "%s\n"
-        "回答要求：像人一样自然交流；需要引用原文时，只能逐字引用上面记忆中的"
-        "原句；可以说“我记得……”，想不起来就诚实说想不起来。"
-    ) % (title, progress_label, hot or "（还没有读过任何内容）", frag_block)
+        "想不起来就诚实说想不起来。"
+    ) % (title, progress_label, hot or "（还没有读过任何内容）",
+         "【此前记住的场景】\n" + fragments if fragments else "")
 
     messages = [{"role": "system", "content": system}]
     for q, a in history_pairs[-3:]:
@@ -628,7 +644,8 @@ def _co_read_answer(book_id, chapter_label, question, history_pairs,
                            chapter_label, bool(args.get("detail")))
         return "未知工具：" + str(name)
 
-    return llm.chat_with_tools(messages, [llm.RECALL_TOOL], executor)
+    tools = [llm.RECALL_TOOL] if len(results) < 3 else None
+    return llm.chat_with_tools(messages, tools, executor)
 
 
 def _discuss_worker(conv_id, book_id, chapter_label, question, position=None):

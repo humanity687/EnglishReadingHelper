@@ -183,11 +183,17 @@ def chat_with_tools(messages, tools, tool_executor, timeout=300):
     """带工具调用的对话循环：模型可多次调用工具（如 recall）。
 
     tool_executor(name, args) -> str（工具结果文本，会被回填给模型）。
-    模型不支持 tools 时自动降级为普通一次调用（预检索片段已在上下文中）。
+    tools 为 None 时直接普通调用；模型不支持 tools 时自动降级为普通调用。
     """
     if not ready():
         raise RuntimeError(STATE["msg"] or "LLM 未配置")
     msgs = list(messages)
+    if not tools:
+        r = STATE["client"].chat.completions.create(
+            model=STATE["model"], messages=msgs,
+            temperature=0.2, timeout=timeout,
+        )
+        return r.choices[0].message.content or ""
     try:
         return _tools_loop(msgs, tools, tool_executor, timeout)
     except Exception as e:
@@ -203,7 +209,7 @@ def chat_with_tools(messages, tools, tool_executor, timeout=300):
 
 
 def _tools_loop(msgs, tools, tool_executor, timeout):
-    for _ in range(6):
+    for _ in range(3):
         r = STATE["client"].chat.completions.create(
             model=STATE["model"],
             messages=msgs,

@@ -247,6 +247,7 @@ def add_scene(book_id, chapter_label, start_pos, end_pos, summary, quotes,
          gist, _json.dumps(details, ensure_ascii=False)),
     )
     c.commit()
+    _idx_bump(book_id)
     return cur.lastrowid
 
 
@@ -269,6 +270,35 @@ def scene_at(book_id, start_pos):
     ).fetchone()
 
 
+_IDX = {}          # book_id -> (token, {gram: {scene_id}})
+_IDX_TOKEN = {}    # book_id -> 版本号（add_scene 时递增）
+
+
+def _idx_bump(book_id):
+    _IDX_TOKEN[book_id] = _IDX_TOKEN.get(book_id, 0) + 1
+
+
+def _blob_of(row):
+    return " ".join([row["gist"], row["summary"], row["details"],
+                     row["quotes"], row["entities"]]).lower()
+
+
+def _get_index(book_id, rows):
+    """构建/复用倒排索引：{双字gram: {scene_id}}，懒加载 + 版本失效。"""
+    token = _IDX_TOKEN.get(book_id, 0)
+    cached = _IDX.get(book_id)
+    if cached and cached[0] == token:
+        return cached[1]
+    idx = {}
+    for r in rows:
+        b = re.sub(r"\s+", "", _blob_of(r))
+        grams = {b[i:i + 2] for i in range(len(b) - 1)}
+        for g in grams:
+            idx.setdefault(g, set()).add(r["id"])
+    _IDX[book_id] = (token, idx)
+    return idx
+
+
 def _ngrams(q):
     """查询 n-gram 集合：双字窗口（中文词基本双字，容错优于三字）。"""
     q = re.sub(r"\s+", "", (q or "").lower())
@@ -278,10 +308,9 @@ def _ngrams(q):
 
 
 def search_scenes(book_id, query, chapter_label=None, limit=8):
-    """按查询双字窗口评分检索场景记录（中英文均免分词，命中数排序）。
+    """按查询双字窗口评分检索场景记录（倒排索引加速，中英文免分词）。
 
-    评分覆盖全部记忆层级（gist/summary/details/quotes/entities），
-    返回的每条记录含四层字段。
+    评分覆盖全部记忆层级（gist/summary/details/quotes/entities）。
     """
     import json as _json
     sql = ("SELECT id, book_id, chapter_label, start_pos, end_pos, gist, "
@@ -303,15 +332,16 @@ def search_scenes(book_id, query, chapter_label=None, limit=8):
     grams = _ngrams(q)
     if not grams:
         return []
-    scored = []
-    for r in rows:
-        blob = " ".join([r["gist"], r["summary"], r["details"],
-                         r["quotes"], r["entities"]]).lower()
-        s = sum(1 for g in grams if g in blob)
-        if s:
-            scored.append((s, r))
-    scored.sort(key=lambda x: (-x[0], x[1]["id"]))
-    out = [dict(r) for _, r in scored[:limit]]
+    idx = _get_index(book_id, rows)
+    scores = {}
+    for g in grams:
+        for sid in idx.get(g, ()):
+            scores[sid] = scores.get(sid, 0) + 1
+    if not scores:
+        return []
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    rowmap = {r["id"]: r for r in rows}
+    out = [dict(rowmap[sid]) for sid, _score in ranked[:limit] if sid in rowmap]
     for r in out:
         r["quotes"] = _json.loads(r["quotes"])
         r["details"] = _json.loads(r["details"])
