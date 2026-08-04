@@ -35,8 +35,11 @@ DISCUSS_PROMPT = (
 
 DISTILL_PROMPT = (
     "你是这本书的共读伙伴，正在记住读过的内容。下面是一个片段（英文原文，"
-    "可能包含几个段落）。请用中文提炼它，只输出一个 JSON 对象：\n"
-    '{{"summary": "这个片段的情节摘要（一句话，中文，25字以内，能让人想起这段情节）",'
+    "可能包含几个段落）。请用中文提炼它，按四个层级输出一个 JSON 对象：\n"
+    '{{"gist": "一句话概括（15字以内，像人的记忆标签，能让人一眼想起这段）",'
+    ' "summary": "具体概括（50-80字，保留情节要点、人物、因果，比概括详细）",'
+    ' "details": ["故事细节要点1", "故事细节要点2", "…"（3-6条，写具体发生了什么：'
+    '谁做了什么事、结果如何、关键事实，比如交易金额、是否骗局、人物反应）"],'
     ' "quotes": [{{"text": "值得记住的原句，必须逐字抄录原文、一字不差（1-3条）",'
     ' "speaker": "说话的角色（若不是对话则为空字符串"}}],'
     ' "entities": "片段中的关键人物/地点/概念（逗号分隔，中英皆可，最多8个）"}}\n\n'
@@ -49,14 +52,19 @@ RECALL_TOOL = {
         "name": "recall",
         "description": "回忆起此前读到的某个情节/场景。当你需要确认某个细节、"
                        "引用书中的具体原句，或感觉记忆里应该有相关内容时调用。"
-                       "返回的记忆片段包含情节摘要和逐字原句。",
+                       "默认返回记忆的概括层；需要更精确的细节（谁做了什么、"
+                       "交易结果等）或更多原句时，设置 detail 为 true 再调用一次。",
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "想回忆的内容：人物、事件、情节关键词（可用中文）",
-                }
+                },
+                "detail": {
+                    "type": "boolean",
+                    "description": "是否要更详细的内容（故事细节+全部原句），默认 false",
+                },
             },
             "required": ["query"],
         },
@@ -148,7 +156,7 @@ def discuss(question, chapter_label, context, history_pairs, timeout=300):
 
 
 def distill(text, timeout=180):
-    """蒸馏一个场景：返回 {'summary', 'quotes', 'entities'}，失败抛异常。"""
+    """蒸馏一个场景为四层记忆：gist / summary / details / quotes，失败抛异常。"""
     content = _chat(DISTILL_PROMPT.format(text=text[:2000]), timeout=timeout)
     d = _parse_json(content)
     if d is None:
@@ -160,8 +168,12 @@ def distill(text, timeout=180):
                 "text": q["text"].strip(),
                 "speaker": (q.get("speaker") or "").strip(),
             })
+    details = [str(x).strip() for x in (d.get("details") or [])
+               if isinstance(x, str) and x.strip()]
     return {
+        "gist": (d.get("gist") or "").strip(),
         "summary": (d.get("summary") or "").strip(),
+        "details": details[:6],
         "quotes": quotes,
         "entities": (d.get("entities") or "").strip(),
     }

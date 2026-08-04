@@ -70,6 +70,12 @@ def init(data_dir):
         CREATE INDEX IF NOT EXISTS idx_scenes_book ON scenes(book_id);
         """
     )
+    for col, decl in (("gist", "TEXT DEFAULT ''"),
+                      ("details", "TEXT DEFAULT '[]'")):
+        try:
+            c.execute("ALTER TABLE scenes ADD COLUMN %s %s" % (col, decl))
+        except sqlite3.OperationalError:
+            pass
     c.commit()
 
 
@@ -227,15 +233,18 @@ def list_msgs(conv_id):
     ).fetchall()
 
 
-def add_scene(book_id, chapter_label, start_pos, end_pos, summary, quotes, entities):
+def add_scene(book_id, chapter_label, start_pos, end_pos, summary, quotes,
+              entities, gist="", details=None):
     c = _conn()
     import json as _json
     quotes = quotes if isinstance(quotes, list) else []
+    details = details if isinstance(details, list) else []
     cur = c.execute(
         "INSERT INTO scenes (book_id, chapter_label, start_pos, end_pos, "
-        "summary, quotes, entities) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "summary, quotes, entities, gist, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (book_id, chapter_label, start_pos, end_pos,
-         summary, _json.dumps(quotes, ensure_ascii=False), entities),
+         summary, _json.dumps(quotes, ensure_ascii=False), entities,
+         gist, _json.dumps(details, ensure_ascii=False)),
     )
     c.commit()
     return cur.lastrowid
@@ -269,10 +278,14 @@ def _ngrams(q):
 
 
 def search_scenes(book_id, query, chapter_label=None, limit=8):
-    """按查询双字窗口评分检索场景记录（中英文均免分词，命中数排序）。"""
+    """按查询双字窗口评分检索场景记录（中英文均免分词，命中数排序）。
+
+    评分覆盖全部记忆层级（gist/summary/details/quotes/entities），
+    返回的每条记录含四层字段。
+    """
     import json as _json
-    sql = ("SELECT id, book_id, chapter_label, start_pos, end_pos, summary, "
-           "quotes, entities FROM scenes WHERE book_id = ?")
+    sql = ("SELECT id, book_id, chapter_label, start_pos, end_pos, gist, "
+           "summary, details, quotes, entities FROM scenes WHERE book_id = ?")
     params = [book_id]
     if chapter_label:
         sql += " AND chapter_label = ?"
@@ -285,13 +298,15 @@ def search_scenes(book_id, query, chapter_label=None, limit=8):
         out = [dict(r) for r in rows[:limit]]
         for r in out:
             r["quotes"] = _json.loads(r["quotes"])
+            r["details"] = _json.loads(r["details"])
         return out
     grams = _ngrams(q)
     if not grams:
         return []
     scored = []
     for r in rows:
-        blob = (r["summary"] + " " + r["quotes"] + " " + r["entities"]).lower()
+        blob = " ".join([r["gist"], r["summary"], r["details"],
+                         r["quotes"], r["entities"]]).lower()
         s = sum(1 for g in grams if g in blob)
         if s:
             scored.append((s, r))
@@ -299,4 +314,5 @@ def search_scenes(book_id, query, chapter_label=None, limit=8):
     out = [dict(r) for _, r in scored[:limit]]
     for r in out:
         r["quotes"] = _json.loads(r["quotes"])
+        r["details"] = _json.loads(r["details"])
     return out

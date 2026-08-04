@@ -467,7 +467,7 @@ def _canonical_sentence(bid, page, fs, s):
 
 
 def _distill_scene(book_id, text, label, start, end):
-    """蒸馏一个场景：LLM 提炼 + verbatim 金句校验，写入云层。"""
+    """蒸馏一个场景为四层记忆（gist/summary/details/quotes），verbatim 校验金句。"""
     if store.scene_at(book_id, start) is not None:
         return
     raw = text[start:end]
@@ -483,7 +483,8 @@ def _distill_scene(book_id, text, label, start, end):
         if len(t) >= 4 and t in raw:
             quotes.append({"text": t, "speaker": q["speaker"]})
     store.add_scene(book_id, label, start, end,
-                    out["summary"][:120], quotes, out["entities"][:200])
+                    out["summary"][:300], quotes, out["entities"][:200],
+                    out["gist"][:60], out["details"])
 
 
 def _distill_eligible(book_id, position, cap=None, force=False):
@@ -528,12 +529,34 @@ def _undistilled_count(book_id, position):
 def _recall(book_id, query, chapter_label=None):
     results = store.search_scenes(
         book_id, query, chapter_label, _CO_READ["recall_limit"])
+def _recall(book_id, query, chapter_label=None, detail=False):
+    """回忆召回：返回记忆片段文本。
+
+    detail=False：仅注入 gist/summary + 一条金句（token 友好）；
+    detail=True：追加故事细节与全部金句（渐进披露）。
+    """
+    results = store.search_scenes(
+        book_id, query, chapter_label, _CO_READ["recall_limit"])
     if not results:
         return "未找到相关记忆。"
     lines = []
     for r in results:
-        parts = ["情节：" + r["summary"]]
-        for q in r["quotes"][:3]:
+        parts = []
+        if r.get("gist"):
+            parts.append("概括：" + r["gist"])
+        if r.get("summary"):
+            parts.append("情节：" + r["summary"])
+        quotes = r.get("quotes") or []
+        if detail:
+            for d in (r.get("details") or [])[:4]:
+                parts.append("细节：" + d)
+            for q in quotes[:3]:
+                s = "原句：" + q["text"]
+                if q.get("speaker"):
+                    s += "（" + q["speaker"] + "）"
+                parts.append(s)
+        elif quotes:
+            q = quotes[0]
             s = "原句：" + q["text"]
             if q.get("speaker"):
                 s += "（" + q["speaker"] + "）"
@@ -601,7 +624,8 @@ def _co_read_answer(book_id, chapter_label, question, history_pairs,
 
     def executor(name, args):
         if name == "recall":
-            return _recall(book_id, args.get("query") or question, chapter_label)
+            return _recall(book_id, args.get("query") or question,
+                           chapter_label, bool(args.get("detail")))
         return "未知工具：" + str(name)
 
     return llm.chat_with_tools(messages, [llm.RECALL_TOOL], executor)
