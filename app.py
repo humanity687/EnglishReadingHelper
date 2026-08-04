@@ -222,11 +222,13 @@ def api_progress():
     except (TypeError, ValueError):
         return jsonify({"error": "bad"}), 400
     store.set_progress(bid, page, fs)
-    if fs and page % _CO_READ["distill_every"] == 0:
+    if fs:
         position = _pos_of_page(bid, page, fs)
-        threading.Thread(
-            target=_distill_eligible, args=(bid, position), daemon=True
-        ).start()
+        if (page % _CO_READ["distill_every"] == 0
+                or _undistilled_count(bid, position) >= 4):
+            threading.Thread(
+                target=_distill_eligible, args=(bid, position), daemon=True
+            ).start()
     return jsonify({"ok": True})
 
 
@@ -484,9 +486,12 @@ def _distill_scene(book_id, text, label, start, end):
                     out["summary"][:120], quotes, out["entities"][:200])
 
 
-def _distill_eligible(book_id, position, cap=None):
-    """定期保底：蒸馏热窗口之前尚未蒸馏的场景（后台线程，单本书单任务）。"""
-    if _DISTILL_STATE.get(book_id):
+def _distill_eligible(book_id, position, cap=None, force=False):
+    """蒸馏热窗口之前尚未蒸馏的场景（后台线程）。
+
+    force=True 时绕过单任务锁（讨论前补齐缺口用，scene_at 防重）。
+    """
+    if _DISTILL_STATE.get(book_id) and not force:
         return
     cap = cap if cap is not None else _CO_READ["distill_batch"]
     book = store.get_book(book_id)
@@ -496,7 +501,7 @@ def _distill_eligible(book_id, position, cap=None):
     hot_start = max(0, position - _CO_READ["hot_window"])
     done = {r["start_pos"] for r in store.list_scenes(book_id)}
     todo = [(label, s, e) for label, s, e in scenes_for(book_id)
-            if e <= hot_start and s not in done]
+            if s < hot_start and e <= position and s not in done]
     todo.sort(key=lambda x: x[1])
     todo = todo[:cap]
     if not todo:
@@ -512,19 +517,12 @@ def _distill_eligible(book_id, position, cap=None):
         _DISTILL_STATE.pop(book_id, None)
 
 
-def _distill_chapter_gap(book_id, chapter_label, position, cap=5):
-    """按需补蒸馏：当前章节位于热窗口之前但尚未蒸馏的场景。"""
-    book = store.get_book(book_id)
-    if book is None:
-        return
-    text = _book_text(book)
+def _undistilled_count(book_id, position):
     hot_start = max(0, position - _CO_READ["hot_window"])
     done = {r["start_pos"] for r in store.list_scenes(book_id)}
-    todo = [(label, s, e) for label, s, e in scenes_for(book_id)
-            if label == chapter_label and e <= hot_start and s not in done]
-    todo.sort(key=lambda x: x[1])
-    for label, s, e in todo[:cap]:
-        _distill_scene(book_id, text, label, s, e)
+    return sum(1 for _l, s, e in scenes_for(book_id)
+               if s < hot_start and e <= position and s not in done)
+
 
 
 def _recall(book_id, query, chapter_label=None):
@@ -568,12 +566,14 @@ def _history_pairs(conv_id):
     return pairs
 
 
-def _co_read_answer(book_id, chapter_label, question, history_pairs):
-    """共读回答：热窗口原文 + 预检索记忆片段 + recall 工具循环。"""
+def _co_read_answer(book_id, chapter_label, question, history_pairs,
+                    position=None):
+    """共读回答：补齐蒸馏缺口 → 热窗口原文 + 预检索记忆片段 + recall 循环。"""
     book = store.get_book(book_id)
     title = book["title"]
-    position = _reading_position(book_id)
-    _distill_chapter_gap(book_id, chapter_label, position)
+    if position is None:
+        position = _reading_position(book_id)
+    _distill_eligible(book_id, position, cap=15, force=True)
 
     text = _book_text(book)
     hot_start = max(0, position - _CO_READ["hot_window"])
@@ -607,10 +607,10 @@ def _co_read_answer(book_id, chapter_label, question, history_pairs):
     return llm.chat_with_tools(messages, [llm.RECALL_TOOL], executor)
 
 
-def _discuss_worker(conv_id, book_id, chapter_label, question):
+def _discuss_worker(conv_id, book_id, chapter_label, question, position=None):
     try:
         answer = _co_read_answer(book_id, chapter_label, question,
-                                 _history_pairs(conv_id))
+                                 _history_pairs(conv_id), position)
     except Exception as e:
         answer = "生成失败：" + str(e)
     store.add_msg(conv_id, "a", answer)
@@ -619,11 +619,12 @@ def _discuss_worker(conv_id, book_id, chapter_label, question):
         task["done"] = True
 
 
-def _start_task(conv_id, book_id, chapter_label, question, to_page):
+def _start_task(conv_id, book_id, chapter_label, question, to_page,
+                position=None):
     _DISC_TASKS[conv_id] = {"to": to_page, "done": False}
     t = threading.Thread(
         target=_discuss_worker,
-        args=(conv_id, book_id, chapter_label, question),
+        args=(conv_id, book_id, chapter_label, question, position),
         daemon=True,
     )
     t.start()
@@ -669,7 +670,7 @@ def discuss_list(bid):
     hot_start = max(0, position - _CO_READ["hot_window"])
     done = {r["start_pos"] for r in store.list_scenes(bid)}
     distillable = sum(1 for _l, s, e in scenes_for(bid)
-                      if e <= hot_start and s not in done)
+                      if s < hot_start and e <= position and s not in done)
     return render_template(
         "discuss.html",
         book=book,
@@ -724,10 +725,18 @@ def discuss_new():
     q = _norm(d.get("question"))
     if not q:
         abort(400, "问题不能为空")
+    position = None
+    try:
+        pg = int(d.get("pg") or 0)
+        fs = int(d.get("fs") or 0)
+        if pg > 0 and fs > 0:
+            position = _pos_of_page(bid, pg, fs)
+    except (TypeError, ValueError):
+        position = None
     conv_id = store.add_conv(bid, q[:40], chapter)
     store.add_msg(conv_id, "q", q)
     to_page = len(session_pages(store.list_msgs(conv_id))) + 1
-    _start_task(conv_id, bid, chapter, q, to_page)
+    _start_task(conv_id, bid, chapter, q, to_page, position)
     return redirect(url_for("discuss_wait", conv_id=conv_id))
 
 
